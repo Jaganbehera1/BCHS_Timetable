@@ -10,7 +10,7 @@ export default defineConfig({
       includeAssets: ['favicon.ico', 'apple-touch-icon.png', 'mask-icon.svg', 'pwa-192x192.svg', 'pwa-512x512.svg'],
       manifest: {
         name: 'Smart Teacher Assistant',
-        short_name: 'SmartTA',
+        short_name: 'BCHSTMS',
         description: 'Modern teacher assistant application',
         theme_color: '#1e40af',
         background_color: '#f8fafc',

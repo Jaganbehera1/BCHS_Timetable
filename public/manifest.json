@@ -1,6 +1,6 @@
 {
   "name": "Smart Teacher Assistant",
-  "short_name": "SmartTA",
+  "short_name": "BCHSTMS",
   "description": "Modern teacher assistant application",
   "start_url": "/",
   "display": "standalone",
