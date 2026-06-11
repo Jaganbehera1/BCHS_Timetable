@@ -1,0 +1,14 @@
+{
+  "name": "Smart Teacher Assistant",
+  "short_name": "SmartTA",
+  "description": "Modern teacher assistant application",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f8fafc",
+  "theme_color": "#1e40af",
+  "orientation": "portrait-primary",
+  "icons": [
+    { "src": "/pwa-192x192.svg", "sizes": "192x192", "type": "image/svg+xml" },
+    { "src": "/pwa-512x512.svg", "sizes": "512x512", "type": "image/svg+xml" }
+  ]
+}
