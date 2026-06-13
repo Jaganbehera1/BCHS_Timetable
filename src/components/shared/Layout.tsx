@@ -263,7 +263,7 @@ export function Layout({ children }: LayoutProps) {
               <div className="hidden lg:block">
                 <div className="flex items-center gap-2 text-slate-400">
                   <Building2 className="w-4 h-4" />
-                  <span className="text-sm">Smart School</span>
+                  <span className="text-sm">PM SHRI B.C. HIGH SCHOOL, RANPUR</span>
                 </div>
               </div>
             </div>

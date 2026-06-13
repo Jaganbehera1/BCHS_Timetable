@@ -1,10 +1,10 @@
 import { useState, useEffect } from 'react';
 import { format } from 'date-fns';
 import {
-  Clock, BookOpen, GraduationCap, Calendar, Coffee,
+  Clock, GraduationCap, Calendar, Coffee,
   CheckCircle, Play, AlertCircle, User,
 } from 'lucide-react';
-import { getCollectionData, queryWhere, getDocumentData } from '../../lib/firestore-helpers';
+import { getCollectionData, getDocumentData } from '../../lib/firestore-helpers';
 import { useAuth } from '../../hooks/useAuth';
 import { PageLoader } from '../shared/LoadingSpinner';
 
@@ -20,13 +20,15 @@ interface PeriodSlot {
 
 interface ScheduleEntry {
   id: string;
-  period_slot_id: string;
+  period_slot_id?: string;
+  period_number?: number;
   class: { id: string; full_name: string } | null;
   subject: { id: string; subject_name: string; color_code?: string } | null;
   room_number?: string;
 }
 
 const DAYS = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+const DAY_MAPPING = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
 
 const DAY_INFO: Record<number, { name: string; startTime: string; endTime: string }> = {
   0: { name: 'Sunday', startTime: '-', endTime: '-' },
@@ -38,15 +40,65 @@ const DAY_INFO: Record<number, { name: string; startTime: string; endTime: strin
   6: { name: 'Saturday', startTime: '6:15 AM', endTime: '11:30 AM' },
 };
 
+const DEFAULT_PERIOD_TIMES: Record<'weekday' | 'saturday', Record<number, { start_time: string; end_time: string; is_break: boolean; break_name: string | null }>> = {
+  weekday: {
+    1: { start_time: '10:15', end_time: '11:00', is_break: false, break_name: null },
+    2: { start_time: '11:00', end_time: '11:45', is_break: false, break_name: null },
+    3: { start_time: '11:45', end_time: '12:30', is_break: false, break_name: null },
+    4: { start_time: '12:30', end_time: '13:15', is_break: false, break_name: null },
+    5: { start_time: '13:15', end_time: '14:00', is_break: true, break_name: 'Lunch Break' },
+    6: { start_time: '14:00', end_time: '14:40', is_break: false, break_name: null },
+    7: { start_time: '14:40', end_time: '15:20', is_break: false, break_name: null },
+    8: { start_time: '15:20', end_time: '16:00', is_break: false, break_name: null },
+  },
+  saturday: {
+    1: { start_time: '06:15', end_time: '07:00', is_break: false, break_name: null },
+    2: { start_time: '07:00', end_time: '07:45', is_break: false, break_name: null },
+    3: { start_time: '07:45', end_time: '08:30', is_break: false, break_name: null },
+    4: { start_time: '08:30', end_time: '09:15', is_break: false, break_name: null },
+    5: { start_time: '09:15', end_time: '09:30', is_break: true, break_name: 'Short Break' },
+    6: { start_time: '09:30', end_time: '10:10', is_break: false, break_name: null },
+    7: { start_time: '10:10', end_time: '10:50', is_break: false, break_name: null },
+    8: { start_time: '10:50', end_time: '11:30', is_break: false, break_name: null },
+  },
+};
+
+const getDefaultPeriodInfo = (dayIndex: number, periodNumber: number) => {
+  const bucket = dayIndex === 6 ? DEFAULT_PERIOD_TIMES.saturday : DEFAULT_PERIOD_TIMES.weekday;
+  return bucket[periodNumber] ?? { start_time: '00:00', end_time: '00:00', is_break: false, break_name: null };
+};
+
 export function TodaySchedulePage() {
   const { user } = useAuth();
   const [schedule, setSchedule] = useState<ScheduleEntry[]>([]);
   const [periodSlots, setPeriodSlots] = useState<PeriodSlot[]>([]);
   const [loading, setLoading] = useState(true);
+  const [debugOpen, setDebugOpen] = useState(false);
 
   const today = new Date();
   const dayOfWeek = DAYS[today.getDay()];
   const dayIndex = today.getDay();
+
+  const normalizeDayValue = (value: any) => {
+    if (value === undefined || value === null) return '';
+    if (typeof value === 'string') {
+      const lower = value.toLowerCase();
+      if (DAY_MAPPING.includes(lower)) return lower;
+      const parsed = Number(value);
+      if (!Number.isNaN(parsed)) return normalizeDayValue(parsed);
+      return '';
+    }
+    if (typeof value === 'number') {
+      if (value >= 0 && value < DAY_MAPPING.length) return DAY_MAPPING[value];
+      if (value >= 1 && value <= DAY_MAPPING.length) return DAY_MAPPING[value - 1];
+    }
+    return '';
+  };
+
+  const matchesDayValue = (value: any) => {
+    const normalized = normalizeDayValue(value);
+    return normalized === dayOfWeek;
+  };
 
   useEffect(() => {
     if (user) fetchData();
@@ -57,24 +109,68 @@ export function TodaySchedulePage() {
     try {
       // Get periods for today (day_index matches day_of_week in DB)
       const ttData = await getCollectionData<any>('timetable_entries');
-      const ttFiltered = ttData.filter(t => t.teacher_id === user.id && t.day_of_week === dayOfWeek);
-      const pData = await queryWhere('period_slots', 'day_of_week', '==', dayIndex === 0 ? 1 : dayIndex);
+        let ttFiltered = ttData.filter(t => t.teacher_id === user.id && matchesDayValue(t.day_of_week));
+        console.debug('[TodaySchedule] raw timetable entries count', ttData.length);
+        console.debug('[TodaySchedule] filtered by teacher+day', ttFiltered.map((t:any) => ({ id: t.id, teacher_id: t.teacher_id, day_of_week: t.day_of_week, period_number: t.period_number, period_slot_id: t.period_slot_id })));
+
+      const allPeriodSlots = await getCollectionData<any>('period_slots');
+        const periodSlotDayIndex = dayIndex === 0 ? 0 : dayIndex - 1; // admin stores 0..5 for Mon..Sat
+      const pData = (allPeriodSlots || []).filter((p:any) => {
+        // Match either numeric day index (0..5) or string day name
+        if (p.day_of_week === periodSlotDayIndex) return true;
+        const slotDay = normalizeDayValue(p.day_of_week);
+        return slotDay === dayOfWeek;
+      });
+
+      // Fallback: if no timetable entries matched by explicit day, try loose matches
+      if (!ttFiltered.length) {
+        ttFiltered = ttData.filter((t:any) => {
+          const teacherMatch = t.teacher_id === user.id || t.teacher_id === (user?.email || null) || t.teacher_id === (user?.id || null);
+          if (!teacherMatch) return false;
+          if (matchesDayValue(t.day_of_week)) return true;
+          if (t.day_of_week === undefined || t.day_of_week === null) {
+            // if admin saved entries without day_of_week but with period_number, include them
+            return t.period_number != null;
+          }
+          // numeric match against periodSlotDayIndex
+          if (!Number.isNaN(Number(t.day_of_week)) && Number(t.day_of_week) === periodSlotDayIndex) return true;
+          return false;
+        });
+      }
 
       const sData = await Promise.all(ttFiltered.map(async (val) => {
-        const classData = val.class_id ? await getDocumentData(`classes/${val.class_id}`) : null;
-        const subjectData = val.subject_id ? await getDocumentData(`subjects/${val.subject_id}`) : null;
+        const classData = val.class_id ? await getDocumentData('classes', val.class_id) : null;
+        const subjectData = val.subject_id ? await getDocumentData('subjects', val.subject_id) : null;
         return {
           id: val.id,
           period_slot_id: val.period_slot_id,
+          period_number: val.period_number,
           room_number: val.room_number,
-          class: classData ? { id: val.class_id, ...classData } : null,
-          subject: subjectData ? { id: val.subject_id, ...subjectData } : null,
+          class: classData ? { ...classData, id: val.class_id } : null,
+          subject: subjectData ? { ...subjectData, id: val.subject_id } : null,
         } as ScheduleEntry;
       }));
 
       setSchedule(sData);
-      const sortedPeriods = pData.sort((a: any, b: any) => (a.period_number || 0) - (b.period_number || 0));
+      let sortedPeriods = pData.sort((a: any, b: any) => (a.period_number || 0) - (b.period_number || 0));
+      if (!sortedPeriods.length && sData.length) {
+        const uniquePeriods = Array.from(new Set(sData.map((entry) => entry.period_number).filter((n): n is number => typeof n === 'number'))).sort((a, b) => a - b);
+        sortedPeriods = uniquePeriods.map((periodNumber) => {
+          const fallback = getDefaultPeriodInfo(dayIndex, periodNumber);
+          return {
+            id: `fallback-${dayOfWeek}-${periodNumber}`,
+            period_number: periodNumber,
+            day_of_week: dayIndex === 0 ? 0 : dayIndex - 1,
+            start_time: fallback.start_time,
+            end_time: fallback.end_time,
+            is_break: fallback.is_break,
+            break_name: fallback.break_name,
+          };
+        });
+      }
+      console.debug('[TodaySchedule] period slots (matched)', sortedPeriods.map((p:any) => ({ id: p.id, day_of_week: p.day_of_week, period_number: p.period_number })));
       setPeriodSlots(sortedPeriods);
+      console.debug('[TodaySchedule] built schedule entries', sData);
     } finally {
       setLoading(false);
     }
@@ -83,8 +179,11 @@ export function TodaySchedulePage() {
   const now = new Date();
   const currentTime = format(now, 'HH:mm');
 
+  const isValidTime = (time: string) => /^\d{2}:\d{2}$/.test(time);
+
   const getStatus = (period: PeriodSlot) => {
     if (period.is_break) return 'break';
+    if (!isValidTime(period.start_time) || !isValidTime(period.end_time)) return 'upcoming';
     if (currentTime >= period.start_time && currentTime < period.end_time) return 'current';
     if (currentTime >= period.end_time) return 'completed';
     return 'upcoming';
@@ -92,8 +191,11 @@ export function TodaySchedulePage() {
 
   const getCurrentPeriodInfo = () => {
     for (const period of periodSlots) {
+      if (!isValidTime(period.start_time) || !isValidTime(period.end_time)) continue;
       if (currentTime >= period.start_time && currentTime < period.end_time) {
-        const entry = schedule.find(e => e.period_slot_id === period.id);
+        const entry = schedule.find(e => (
+          e.period_slot_id ? e.period_slot_id === period.id : e.period_number === period.period_number
+        ));
         return { period, entry, status: getStatus(period) };
       }
     }
@@ -230,7 +332,9 @@ export function TodaySchedulePage() {
         {periodSlots.length > 0 ? (
           <div className="divide-y divide-slate-100 dark:divide-slate-700">
             {periodSlots.map((period) => {
-              const entry = schedule.find(e => e.period_slot_id === period.id);
+              const entry = schedule.find(e => (
+                e.period_slot_id ? e.period_slot_id === period.id : e.period_number === period.period_number
+              ));
               const status = getStatus(period);
 
               return (
@@ -284,7 +388,7 @@ export function TodaySchedulePage() {
                             style={{ backgroundColor: entry.subject?.color_code || '#3b82f6' }}
                           />
                           <p className="font-medium text-slate-900 dark:text-white">
-                            {entry.subject?.subject_name}
+                            {entry.subject?.subject_name || 'Class'}
                           </p>
                           {status === 'current' && (
                             <span className="px-2 py-0.5 text-xs font-medium bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400 rounded-full">
@@ -293,27 +397,16 @@ export function TodaySchedulePage() {
                           )}
                         </div>
                         <p className="text-sm text-slate-500 dark:text-slate-400 mt-0.5">
-                          {entry.class?.full_name}
-                          {entry.room_number && ` - Room ${entry.room_number}`}
+                          {entry.class?.full_name || 'Assigned class'}
                         </p>
+                        {status === 'current' && !period.is_break && (
+                          <span className="px-2 py-1 text-xs font-medium bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400 rounded-full">
+                            In Progress
+                          </span>
+                        )}
                       </div>
                     ) : (
-                      <p className="text-slate-400 dark:text-slate-500">Free Period</p>
-                    )}
-                  </div>
-
-                  {/* Status Badge */}
-                  <div className="flex-shrink-0">
-                    {status === 'completed' && !period.is_break && (
-                      <span className="flex items-center gap-1 text-xs text-green-600 dark:text-green-400">
-                        <CheckCircle className="w-4 h-4" />
-                        Done
-                      </span>
-                    )}
-                    {status === 'current' && !period.is_break && (
-                      <span className="px-2 py-1 text-xs font-medium bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400 rounded-full">
-                        In Progress
-                      </span>
+                      <p className="text-sm text-slate-500 dark:text-slate-400">Free Period</p>
                     )}
                   </div>
                 </div>
@@ -327,6 +420,31 @@ export function TodaySchedulePage() {
             {!isWorkingDay && (
               <p className="text-sm text-slate-400 dark:text-slate-500 mt-1">It's a Sunday!</p>
             )}
+          </div>
+        )}
+      </div>
+
+      {/* Debug Panel */}
+      <div className="mt-4">
+        <button
+          onClick={() => setDebugOpen(!debugOpen)}
+          className="text-xs text-slate-500 hover:underline"
+        >
+          {debugOpen ? 'Hide debug info' : 'Show debug info'}
+        </button>
+        {debugOpen && (
+          <div className="mt-2 p-3 bg-slate-50 dark:bg-slate-800 rounded">
+            <h4 className="font-medium mb-2">Debug: fetched data</h4>
+            <div className="text-xs text-slate-700 dark:text-slate-300">
+              <div className="mb-2">
+                <strong>Schedule entries:</strong>
+                <pre className="whitespace-pre-wrap text-[10px] max-h-40 overflow-auto">{JSON.stringify(schedule, null, 2)}</pre>
+              </div>
+              <div>
+                <strong>Period slots:</strong>
+                <pre className="whitespace-pre-wrap text-[10px] max-h-40 overflow-auto">{JSON.stringify(periodSlots, null, 2)}</pre>
+              </div>
+            </div>
           </div>
         )}
       </div>

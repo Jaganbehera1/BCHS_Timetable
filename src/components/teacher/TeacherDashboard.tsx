@@ -26,6 +26,24 @@ interface Notice {
   created_at: string;
 }
 
+const DAY_MAPPING = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+
+const normalizeDayValue = (value: any) => {
+  if (value === undefined || value === null) return '';
+  if (typeof value === 'string') {
+    const lower = value.toLowerCase();
+    if (DAY_MAPPING.includes(lower)) return lower;
+    const parsed = Number(value);
+    if (!Number.isNaN(parsed)) return normalizeDayValue(parsed);
+    return '';
+  }
+  if (typeof value === 'number') {
+    if (value >= 0 && value < DAY_MAPPING.length) return DAY_MAPPING[value];
+    if (value >= 1 && value <= DAY_MAPPING.length) return DAY_MAPPING[value - 1];
+  }
+  return '';
+};
+
 export function TeacherDashboard() {
   const { user } = useAuth();
   const [todayClasses, setTodayClasses] = useState<ScheduleEntry[]>([]);
@@ -48,20 +66,29 @@ export function TeacherDashboard() {
       const currentTime = format(now, 'HH:mm');
       
       const ttData = await getCollectionData<any>('timetable_entries');
-      const ttFiltered = ttData.filter(t => t.teacher_id === user.id && t.day_of_week === dayOfWeek);
+      const ttFiltered = ttData.filter(t => t.teacher_id === user.id && normalizeDayValue(t.day_of_week) === dayOfWeek);
       
       const nData = await queryWhere('notices', 'is_active', '==', true);
       
+      const allPeriodSlots = await getCollectionData<any>('period_slots');
       const tData = await Promise.all(ttFiltered.map(async (val) => {
-        const classData = val.class_id ? await getDocumentData(`classes/${val.class_id}`) : null;
-        const subjectData = val.subject_id ? await getDocumentData(`subjects/${val.subject_id}`) : null;
-        const periodData = val.period_slot_id ? await getDocumentData(`period_slots/${val.period_slot_id}`) : null;
+        const classData = val.class_id ? await getDocumentData('classes', val.class_id) : null;
+        const subjectData = val.subject_id ? await getDocumentData('subjects', val.subject_id) : null;
+        let periodData = null;
+        if (val.period_slot_id) {
+          periodData = await getDocumentData('period_slots', val.period_slot_id);
+        } else if (val.period_number != null) {
+          periodData = allPeriodSlots.find((p:any) => {
+            const slotDay = normalizeDayValue(p.day_of_week);
+            return slotDay === dayOfWeek && p.period_number === val.period_number;
+          }) || null;
+        }
         return {
           id: val.id,
           room_number: val.room_number,
-          class: classData ? { id: val.class_id, ...classData } : null,
-          subject: subjectData ? { id: val.subject_id, ...subjectData } : null,
-          period_slot: periodData ? { id: val.period_slot_id, ...periodData } : null,
+          class: classData ? { ...classData, id: val.class_id } : null,
+          subject: subjectData ? { ...subjectData, id: val.subject_id } : null,
+          period_slot: periodData ? { id: val.period_slot_id || '', ...periodData } : null,
         } as ScheduleEntry;
       }));
 
@@ -242,7 +269,7 @@ export function TeacherDashboard() {
 
           <div className="p-4 space-y-2">
             {todayClasses.length > 0 ? (
-              todayClasses.slice(0, 5).map((entry, index) => (
+              todayClasses.slice(0, 5).map((entry) => (
                 <div
                   key={entry.id}
                   className={`flex items-center justify-between p-3 rounded-xl transition-colors ${

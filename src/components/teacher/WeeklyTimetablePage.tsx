@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { format, startOfWeek, addDays } from 'date-fns';
 import {
-  Clock, BookOpen, GraduationCap, Calendar, ChevronLeft, ChevronRight,
+  BookOpen, GraduationCap, Calendar, ChevronLeft, ChevronRight,
   Coffee, AlertCircle,
 } from 'lucide-react';
 import { getCollectionData, queryWhere, getDocumentData } from '../../lib/firestore-helpers';
@@ -20,8 +20,9 @@ interface PeriodSlot {
 
 interface ScheduleEntry {
   id: string;
-  day_of_week: string;
+  day_of_week: string | number;
   period_slot_id: string;
+  period_number?: number;
   class: { id: string; full_name: string } | null;
   subject: { id: string; subject_name: string; color_code: string } | null;
   room_number?: string;
@@ -35,6 +36,51 @@ const DAYS = [
   { value: 'friday', label: 'Friday', short: 'Fri', index: 4 },
   { value: 'saturday', label: 'Saturday', short: 'Sat', index: 5 },
 ];
+
+const DAY_MAPPING = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+
+const DEFAULT_PERIOD_TIMES: Record<'weekday' | 'saturday', Record<number, { start_time: string; end_time: string; is_break: boolean; break_name: string | null }>> = {
+  weekday: {
+    1: { start_time: '10:15', end_time: '11:00', is_break: false, break_name: null },
+    2: { start_time: '11:00', end_time: '11:45', is_break: false, break_name: null },
+    3: { start_time: '11:45', end_time: '12:30', is_break: false, break_name: null },
+    4: { start_time: '12:30', end_time: '13:15', is_break: false, break_name: null },
+    5: { start_time: '13:15', end_time: '14:00', is_break: true, break_name: 'Lunch Break' },
+    6: { start_time: '14:00', end_time: '14:40', is_break: false, break_name: null },
+    7: { start_time: '14:40', end_time: '15:20', is_break: false, break_name: null },
+    8: { start_time: '15:20', end_time: '16:00', is_break: false, break_name: null },
+  },
+  saturday: {
+    1: { start_time: '06:15', end_time: '07:00', is_break: false, break_name: null },
+    2: { start_time: '07:00', end_time: '07:45', is_break: false, break_name: null },
+    3: { start_time: '07:45', end_time: '08:30', is_break: false, break_name: null },
+    4: { start_time: '08:30', end_time: '09:15', is_break: false, break_name: null },
+    5: { start_time: '09:15', end_time: '09:30', is_break: true, break_name: 'Short Break' },
+    6: { start_time: '09:30', end_time: '10:10', is_break: false, break_name: null },
+    7: { start_time: '10:10', end_time: '10:50', is_break: false, break_name: null },
+    8: { start_time: '10:50', end_time: '11:30', is_break: false, break_name: null },
+  },
+};
+
+const normalizeDayValue = (value: any) => {
+  if (value === undefined || value === null) return '';
+  if (typeof value === 'string') {
+    const lower = value.toLowerCase();
+    if (DAY_MAPPING.includes(lower)) return lower;
+    const parsed = Number(value);
+    if (!Number.isNaN(parsed)) return normalizeDayValue(parsed);
+    return '';
+  }
+  if (typeof value === 'number') {
+    if (value >= 0 && value < DAY_MAPPING.length) return DAY_MAPPING[value];
+    if (value >= 1 && value <= DAY_MAPPING.length) return DAY_MAPPING[value - 1];
+  }
+  return '';
+};
+
+const getDefaultPeriodInfo = (periodNumber: number) => {
+  return DEFAULT_PERIOD_TIMES.weekday[periodNumber] ?? { start_time: '10:15', end_time: '11:00', is_break: false, break_name: null };
+};
 
 export function WeeklyTimetablePage() {
   const { user } = useAuth();
@@ -53,18 +99,39 @@ export function WeeklyTimetablePage() {
       // Get unique period slots (one day is enough since structure is same)
       const ttData = await getCollectionData<any>('timetable_entries');
       const ttFiltered = ttData.filter(t => t.teacher_id === user.id);
-      const pData = await queryWhere('period_slots', 'day_of_week', '==', 0);
+      const allPeriodSlots = await getCollectionData<any>('period_slots');
+      let pData = await queryWhere('period_slots', 'day_of_week', '==', 0);
+      if (!pData.length) {
+        const mondaySlots = allPeriodSlots.filter((p:any) => normalizeDayValue(p.day_of_week) === 'monday');
+        pData = mondaySlots.length ? mondaySlots : allPeriodSlots.filter((p:any) => p.day_of_week === 0 || p.day_of_week === '0');
+      }
+      if (!pData.length && ttFiltered.length) {
+        const uniquePeriods = Array.from(new Set(ttFiltered.map((entry:any) => entry.period_number).filter((n): n is number => typeof n === 'number'))).sort((a, b) => a - b);
+        pData = uniquePeriods.map((periodNumber) => {
+          const fallback = getDefaultPeriodInfo(periodNumber);
+          return {
+            id: `fallback-${periodNumber}`,
+            period_number: periodNumber,
+            day_of_week: 0,
+            start_time: fallback.start_time,
+            end_time: fallback.end_time,
+            is_break: fallback.is_break,
+            break_name: fallback.break_name,
+          };
+        });
+      }
 
       const sData = await Promise.all(ttFiltered.map(async (val) => {
-        const classData = val.class_id ? await getDocumentData(`classes/${val.class_id}`) : null;
-        const subjectData = val.subject_id ? await getDocumentData(`subjects/${val.subject_id}`) : null;
+        const classData = val.class_id ? await getDocumentData('classes', val.class_id) : null;
+        const subjectData = val.subject_id ? await getDocumentData('subjects', val.subject_id) : null;
         return {
           id: val.id,
           day_of_week: val.day_of_week,
           period_slot_id: val.period_slot_id,
+          period_number: val.period_number,
           room_number: val.room_number,
-          class: classData ? { id: val.class_id, ...classData } : null,
-          subject: subjectData ? { id: val.subject_id, ...subjectData } : null,
+          class: classData ? { ...classData, id: val.class_id } : null,
+          subject: subjectData ? { ...subjectData, id: val.subject_id } : null,
         } as ScheduleEntry;
       }));
 
@@ -76,8 +143,11 @@ export function WeeklyTimetablePage() {
     }
   };
 
-  const getEntry = (day: string, periodSlotId: string) => {
-    return schedule.find(e => e.day_of_week === day && e.period_slot_id === periodSlotId);
+  const getEntry = (day: string, periodSlotId: string, periodNumber?: number) => {
+    return schedule.find(e => normalizeDayValue(e.day_of_week) === day && (
+      (e.period_slot_id && e.period_slot_id === periodSlotId) ||
+      (e.period_number != null && periodNumber != null && e.period_number === periodNumber)
+    ));
   };
 
   const isToday = (dayIndex: number) => {
@@ -171,7 +241,7 @@ export function WeeklyTimetablePage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 dark:divide-slate-700">
-              {periodSlots.map((period, idx) => {
+              {periodSlots.map((period) => {
                 const duration = getDuration(period.start_time, period.end_time);
 
                 return (
@@ -211,7 +281,7 @@ export function WeeklyTimetablePage() {
 
                     {/* Day Columns */}
                     {DAYS.map(day => {
-                      const entry = getEntry(day.value, period.id);
+                      const entry = getEntry(day.value, period.id, period.period_number);
                       const today = isToday(day.index);
 
                       return (

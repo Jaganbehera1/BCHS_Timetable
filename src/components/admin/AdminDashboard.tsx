@@ -27,7 +27,7 @@ export function AdminDashboard() {
   });
   const [recentActivity, setRecentActivity] = useState<Activity[]>([]);
   const [loading, setLoading] = useState(true);
-  const [schoolName, setSchoolName] = useState('Smart School');
+  const [schoolName, setSchoolName] = useState('PM SHRI B.C. HIGH SCHOOL, RANPUR');
 
   useEffect(() => {
     fetchStats();
