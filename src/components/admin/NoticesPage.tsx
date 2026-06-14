@@ -4,7 +4,7 @@ import {
   Plus, Edit2, Trash2, MessageSquare, Search, Filter, 
   ChevronDown, ChevronUp, Download, Eye, Calendar, 
   Bell, AlertCircle, CheckCircle, XCircle, Clock,
-  Pin, PinOff, Share2, Copy, Award, TrendingUp
+  User, Pin, PinOff, Share2, Copy, Award, TrendingUp
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { getCollectionData, addDocument, updateDocument, deleteDocument } from '../../lib/firestore-helpers';
